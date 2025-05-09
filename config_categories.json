@@ -1,0 +1,29 @@
+{
+    "niveles_educativos": ["Inicial (PreKinder/Kinder)",
+                                     "Básica Generalista",
+                                        "Básica con Mención",
+                                         "Media",
+                                          "Técnico Profesional",
+                                            "Educación Diferencial"],
+    "cursos_por_nivel_educativo":{
+        "Inicial (PreKinder/Kinder)": ["PreKinder", "Kinder"],
+        "Básica Generalista": ["1° Básico", "2° Básico", "3° Básico", "4° Básico"],
+        "Básica con Mención": ["5° Básico", "6° Básico"],
+        "Media": ["7° Básico", "8° Básico", "1° Medio", "2° Medio", "3° Medio", "4° Medio"],
+        "Técnico Profesional": ["3° Medio", "4° Medio"],
+        "Educación Diferencial": 
+        ["PreKinder", "Kinder",
+                            "1° Básico", "2° Básico", "3° Básico", "4° Básico", 
+                            "5° Básico", "6° Básico", "7° Básico", "8° Básico",
+                            "1° Medio", "2° Medio", "3° Medio", "4° Medio"]
+    },
+    "asignaturas_por_nivel_educativo":{
+        "Inicial (PreKinder/Kinder)": ["Educación Parvularia"],
+        "Básica Generalista": ["Generalista (Sin Mención)", "Lenguaje y Comunicación", "Matemática", "Ciencias Naturales", "Historia, geografía y Ciencias Sociales", "Educación Física y Salud", "Artes Visuales", "Artes Musicales", "Tecnología", "Orientación", "Religión", "Inglés"],
+        "Básica con Mención": ["Lenguaje y Comunicación", "Matemática", "Ciencias Naturales", "Historia, geografía y Ciencias Sociales", "Educación Física y Salud", "Artes Visuales", "Artes Musicales", "Tecnología", "Orientación", "Religión", "Inglés"],
+        "Media":["Lenguaje y Comunicación", "Matemática", "Ciencias Naturales", "Historia, geografía y Ciencias Sociales", "Educación Física y Salud", "Artes Visuales", "Artes Musicales", "Tecnología", "Orientación", "Religión", "Filosofía", "Inglés", "Física (CN)", "Química", "Biología"],
+        "Técnico Profesional": ["Telecomunicaciones", "Mecánica Automotriz", "Electricidad", "Contabilidad"],
+        "Educación Diferencial": [""]
+    }
+
+}

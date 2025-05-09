@@ -1,0 +1,38 @@
+{
+    "ED_MAPPING":{
+        "Educación Media [7° a IV medio]": "Media",
+        "Educación Básica con mención [5° a 6° Básico]": "Básica con Mención",
+        "Educación Básica [1° a 4° Básico]": "Básica Generalista",
+        "Educación Parvularia [Kínder y Pre kínder]": "Inicial (PreKinder/Kinder)",
+        "Educación Técnico Profesional": "Técnico Profesional",
+        "Educación Diferencial": "Educación Diferencial"
+    },
+    "school_name_map" : {
+        "Jesús Servidor": "Colegio Jesús Servidor",
+        "Victoria Prieto": "Colegio Bicentenario Victoria Prieto",
+        "Nuestra Señora de las Mercedes": "Liceo Nuestra Señora de las Mercedes",
+        "Santo Cura de Ars": "Colegio Bicentenario Santo Cura de Ars",
+        "Nazaret de la Florida": "Colegio Nazaret de la Florida",
+        "Sagrada Familia": "Escuela Sagrada Familia",
+        "Alberto Hurtado": "Liceo Alberto Hurtado",
+        "Vicente Valdés": "Colegio Técnico Profesional Vicente Valdés",
+        "Nuestra Señora de la Guadalupe": "Liceo Bicentenario Nuestra Señora de Guadalupe",
+        "Santo Tomás": "Colegio Santo Tomás",
+        "Padre Esteban Gumucio": "Colegio Polivalente Padre Esteban Gumucio Vives"
+    },
+    "cols_map" : {
+        "Marca temporal": "created_at",
+        "1. Colegio que solicita el Cargo:": "school_name",
+        "Dirección de correo electrónico": "created_by",
+        "2. Nivel de desempeño del docente": "nivel_educativo",
+        "6. Fecha de inicio actividades": "fecha_inicio",
+        "7. Fecha de término de actividades (Si aplica)": "fecha_fin",
+        "4. Horas de contrato": "horas_contrato",
+        "3. ¿Debe tener alguna mención?\nConsiderar la mención para desempeñarse según ciclo de desempeño. ": "asignatura",
+        "8. ¿Con o sin jefatura?": "jefatura",
+        "9. ¿Debe tener alguna mención, especialidad o postítulo?, ¿Cuál?\nEj.: Educador/a Diferencial mención en TEL o NEEP": "mencion_especialidad_postitulo",
+        "10. Por último, ¿La vacante es confidencial?": "vacante_confidencial",
+        "5. Días de la semana a desempeñarse": "dias_de_la_semana"
+    }
+
+}

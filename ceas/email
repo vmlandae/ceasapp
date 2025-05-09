@@ -1,0 +1,185 @@
+from ceas.reemplazos import gmail_fixed
+from ceas.reemplazos.gmail_fixed import authenticate_fixed
+import streamlit as st
+import os
+import requests
+from io import BytesIO
+from email.mime.base import MIMEBase
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email import encoders
+import base64
+from ceas.reemplazos import gmail_fixed
+# We assume you already have these from your previous script:
+# from gmail_fixed import authenticate_fixed, create_html_message, send_message
+
+def download_cv(cv_link):
+    """
+    Placeholder function to retrieve the CV file from the 'cv_link'.
+    - If cv_link is an HTTP link, we do requests.get
+    - If it's a local path, we do open(...) in binary mode
+    We return (filename, file_content_bytes).
+    If the link is a Google Drive share link, you'd do custom logic or use Drive API.
+    """
+    # This is just a dummy approach:
+    # If cv_link is e.g. "https://myserver.com/files/cv_123.pdf"
+    # We'll do:
+    try:
+        if cv_link.startswith("http"):
+            r = requests.get(cv_link)
+            r.raise_for_status()
+            # attempt to guess a filename from the link
+            filename = cv_link.split("/")[-1] or "cv_file.pdf"
+            content = r.content
+        else:
+            # treat as local path
+            filename = os.path.basename(cv_link)
+            with open(cv_link,"rb") as f:
+                content = f.read()
+        return (filename, content)
+    except Exception as e:
+        st.warning(f"No se pudo descargar el CV: {cv_link} => {e}")
+        return (None,None)
+
+def panel_select_candidates(df_candidates):
+    """
+    Streamlit panel that:
+      - Lists candidates
+      - For each candidate, includes a checkbox
+      - After the checkboxes, provides fields for 'to_email', 'subject', 'message'
+      - On "Send Email" button => calls send_selected_candidates_email(...)
+    We'll rely on your existing gmail_fixed.py logic for sending the email,
+    or define a new function below.
+
+    Param:
+      df_candidates: DataFrame of filtered candidates with columns like
+          ['applicant_id','first_name','last_name','cv_link', 'email', etc.]
+    """
+    st.title("Seleccionar Candidatos para Enviar Correo")
+    if df_candidates.empty:
+        st.info("No hay candidatos disponibles.")
+        return
+
+    st.write("Selecciona los candidatos que deseas contactar.")
+    selected_ids = []
+    # We'll do a for i, row in df_candidates.iterrows()
+    # create a checkbox for each
+    for idx, row in df_candidates.iterrows():
+        full_name = f"{row.get('first_name','')} {row.get('last_name','')}".strip()
+        cb = st.checkbox(f"{full_name} (ID: {row.get('applicant_id')})", value=False, key=f"cand_{row['applicant_id']}")
+        if cb:
+            selected_ids.append(row["applicant_id"])
+
+    st.write("---")
+    st.subheader("Datos del correo a enviar")
+    to_email = st.text_input("Enviar a (email destino)", "colegio@ejemplo.com")
+    subject = st.text_input("Asunto", "Lista de candidatos seleccionados")
+    message_body = st.text_area("Mensaje", "Estimado, se adjuntan los CVs de los candidatos seleccionados...")
+
+    if st.button("Enviar correo con CVs adjuntos"):
+        # build the subset for the selected IDs
+        subset = df_candidates[df_candidates["applicant_id"].isin(selected_ids)].copy()
+
+        if subset.empty:
+            st.warning("No seleccionaste ningún candidato.")
+            return
+        # Now call the function that actually sends the email
+        success = send_selected_candidates_email(
+            subset,
+            to_email,
+            subject,
+            message_body
+        )
+        if success:
+            st.success("Correo enviado exitosamente.")
+        else:
+            st.error("Ocurrió un error al enviar el correo.")
+
+def send_selected_candidates_email(df_sel, to_email, subject, body_text):
+    """
+    Takes the selected subset of df_candidates (df_sel),
+    downloads each CV from 'cv_link',
+    attaches them, and sends a single email to 'to_email'.
+
+    We'll do a simple HTML or text body for the message, plus multiple attachments.
+    """
+    try:
+        # we assume you can re-use your authenticate_fixed or a service you have:
+        from gmail_fixed import authenticate_fixed
+        from googleapiclient.discovery import build
+
+        service = authenticate_fixed()
+
+        # Let's build the MIME email manually to handle attachments
+        from email.mime.multipart import MIMEMultipart
+        from email.mime.text import MIMEText
+
+        message_root = MIMEMultipart()
+        message_root["From"] = "personas@ceas.cl"
+        message_root["To"] = to_email
+        message_root["Subject"] = subject
+
+        # attach body as text or HTML
+        # you can do text or HTML. We'll do simple text:
+        message_root.attach(MIMEText(body_text,"plain","utf-8"))
+
+        # Now attach each CV
+        for idx, row in df_sel.iterrows():
+            cv_link = row.get("cv_link","")
+            if not cv_link:
+                continue
+            filename, filebytes = download_cv(cv_link)
+            if filename and filebytes:
+                # create a MIMEBase
+                import mimetypes
+                from email.mime.base import MIMEBase
+                from email import encoders
+
+                # guess the mimetype from extension
+                ctype, encoding = mimetypes.guess_type(filename)
+                if ctype is None:
+                    ctype = "application/octet-stream"
+                maintype, subtype = ctype.split("/",1)
+
+                part = MIMEBase(maintype, subtype)
+                part.set_payload(filebytes)
+                encoders.encode_base64(part)
+                part.add_header("Content-Disposition","attachment", filename=filename)
+                message_root.attach(part)
+
+        # now we have a multi-part message with attachments
+        import base64
+        raw_msg = base64.urlsafe_b64encode(message_root.as_bytes()).decode()
+
+        result = service.users().messages().send(userId="me", body={"raw": raw_msg}).execute()
+        print("Message sent. ID:", result["id"])
+        return True
+    except Exception as e:
+        print("Error sending email with attachments:", e)
+        return False
+
+def enviar_correo(email, subject, body_text, attachments=None):
+    """
+    Envia un correo a la dirección email con el asunto y el cuerpo especificados.
+    Si se proporcionan archivos adjuntos, los añade al correo.
+    """
+    # Aquí puedes usar tu función de envío de correo
+    # Por ejemplo:
+    # gmail_fixed.send_message(email, subject, body_text, attachments)
+    
+    from googleapiclient.discovery import build
+
+    service = authenticate_fixed()
+
+    # Let's build the MIME email manually to handle attachments
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+
+    message_root = MIMEMultipart()
+    message_root["From"] = "personas@ceas.cl"
+    message_root["To"] = to_email
+    message_root["Subject"] = subject
+
+    # attach body as text or HTML
+    # you can do text or HTML. We'll do simple text:
+    message_root.attach(MIMEText(body_text,"plain","utf-8"))

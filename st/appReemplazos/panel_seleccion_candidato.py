@@ -67,21 +67,26 @@ def panel(solicitud):
     
     st.session_state["data"] = data
 
-    st.write(st.session_state["data"])
     
-    st.divider()
+    
+    
     # escribimos numero de solicitud : replacement_id
     st.subheader(f"Solicitud: {int(data['replacement_id'])}")
     # solicitante, institución, fecha de creación de solicitud
     c1, c2, c3 = st.columns(3)
     with c1:
         st.write(f"Solicitante: {data['created_by']}")
-    with c2:
         st.write(f"Institución: {data['school_name']}")
-    with c3:
+    # Si la solicitud fue creada por un usuario de la oficina central, mostrar el nombre de la oficina
+    with c2:
+        st.write(f"Origen: {data['created_with']}")
         st.write(f"Fecha de creación: {data['created_at']}")
+    with c3:
+        st.write(f"Fecha de inicio: {data['fecha_inicio']}")
+        st.write(f"Fecha de fin: {data['fecha_fin']}")
+        
     
-    st.write(f"Días seleccionados: {data['dias_seleccionados']}")
+    
     # Mostrar los datos de la solicitud:
     # asignaturas, nivel educativo, dias_seleccionados
     for nivel, subject in data['asignatura'].items():
@@ -141,7 +146,7 @@ def panel(solicitud):
     st.divider()
 
     # Aplicar filtros al DataFrame de candidatos usando los parámetros (clone de solicitud)
-    cleaned_applicants = cleanup_applicants(st.session_state['dfs']['applicants'])
+    cleaned_applicants = st.session_state['dfs']['cleaned_applicants']
     # Construir request modificado
     mod_req = copy.deepcopy(req)
     mod_req["genero"] = genero

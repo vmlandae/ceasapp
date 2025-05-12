@@ -276,7 +276,7 @@ def create_clean_applicants_sheet(df_applicants: pd.DataFrame, write_to_gsheet: 
         # # 2. Convertir serialized_row a un DataFrame
         df_serialized_cleaned_applicants = pd.DataFrame(serialized_cleaned_applicants_dict).T
         try:        
-            print(df_serialized_cleaned_applicants.head())
+            #print(df_serialized_cleaned_applicants.head())
             conn.update(data=df_serialized_cleaned_applicants, worksheet=st.session_state["app_name"] + "CleanApplicants")
             
         except Exception as e:
@@ -1017,21 +1017,23 @@ def validate_request(new_request):
     if not nivel_educ or len(nivel_educ) == 0:
         errors.append("Debe seleccionar al menos un nivel educativo.")
 
-    # 3) Check that asignatura is not empty
-    #   new_request["asignatura"] = {nivel -> list} or list
-    asig = new_request.get("asignatura", {})
-    # assume it might be a dict or a list
-    total_asig = 0
-    if isinstance(asig, dict):
-        for niv, arr in asig.items():
-            total_asig += len(arr)
-    elif isinstance(asig, list):
-        total_asig += len(asig)
-    if total_asig == 0:
-        errors.append("Debe especificar al menos una asignatura para el reemplazo.")
+    # Flag indicating whether the request is ONLY Educación Diferencial
+    ed_diferencial_included = "Educación Diferencial" in nivel_educ
 
-    # 4) Check that 'curso' is not empty (skip for GForm imports)
-    if new_request.get("created_with") != "gform":
+    # 3) Check asignatura (except when Educación Diferencial está presente)
+    if not ed_diferencial_included:
+        asig = new_request.get("asignatura", {})
+        total_asig = 0
+        if isinstance(asig, dict):
+            for niv, arr in asig.items():
+                total_asig += len(arr)
+        elif isinstance(asig, list):
+            total_asig += len(asig)
+        if total_asig == 0:
+            errors.append("Debe especificar al menos una asignatura para el reemplazo.")
+
+    # 4) Check curso (except Educación Diferencial) and only for webapp
+    if not ed_diferencial_included and new_request.get("created_with") != "gform":
         curso_val = new_request.get("curso", {})
         total_cursos = 0
         if isinstance(curso_val, dict):
@@ -1123,9 +1125,8 @@ def filter_applicants_by_request(request: dict, cleaned_applicants: "pd.DataFram
 
     subset = cleaned_applicants.copy()
     print("filter_applicants_by_request: filtering...")
-    print(request)
-    # print types of each request item
-    print("request types:", {k: type(v) for k, v in request.items()})
+    # print subset columns types using a for where each column goes through apply(type).unique()
+    
     # 1) Genero
     genero_req = request.get("genero", "Indiferente")
     if genero_req != "Indiferente":
@@ -1135,12 +1136,6 @@ def filter_applicants_by_request(request: dict, cleaned_applicants: "pd.DataFram
     niv_req = request.get("nivel_educativo", [])
     curso_dict = request.get("curso", {})  # dict p.ej. {"Básica":["7° Básico","8° Básico"]}
     effective_levels = set(niv_req)
-
-    # # si "Básica" en niv_req y en curso_dict hay "7°/8° Básico," agregamos "Media"
-    # if "Básica" in curso_dict:
-    #     basic_courses = curso_dict["Básica"]  # e.g. ["7° Básico","8° Básico"]
-    #     if any(curso.startswith("7°") or curso.startswith("8°") for curso in basic_courses):
-    #         effective_levels.add("Media")
 
     # Filtramos => ed_licence_level intersecte con effective_levels
     if effective_levels:
@@ -1178,9 +1173,12 @@ def filter_applicants_by_request(request: dict, cleaned_applicants: "pd.DataFram
     disp_type = request.get("disponibilidad","Parcial")
     days_req = request.get("dias_de_la_semana", [])
     days_req = list(set(days_req))  # unique
+    # ordenar días de la semana
+    days_req = sorted(days_req, key=lambda x: ["Lunes","Martes","Miércoles","Jueves","Viernes"].index(x))
     if days_req:
         if disp_type == "Completa":
-
+            print("days_req:",days_req)
+            #print("available_days:",subset["available_days"].tolist())
             subset = subset[
                 subset["available_days"].apply(
                     lambda dd: all(d in dd for d in days_req)
@@ -1272,6 +1270,7 @@ def cleanup_applicants(df):
 
     # Copiamos df
     newdf = df.copy()
+
     
     # --- 0) Email normalization: lowercase and strip whitespace ---
     if "email" in newdf.columns:
@@ -1367,9 +1366,8 @@ def cleanup_applicants(df):
         else:
             # parse days and translate
             newdf["available_days"] = newdf["available_days"].apply(parse_days_and_translate)
+        
 
-
-    
     
     # --- 4) parse subjects => keep raw, filtrar en lista permitida ---
     if "subjects" not in newdf.columns:

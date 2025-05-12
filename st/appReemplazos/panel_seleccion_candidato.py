@@ -175,7 +175,7 @@ def panel(solicitud):
     #    Puede ser mediante un pickle o mediante una lectura de la base de datos.
     data = load_request(load_from="db", solicitud=solicitud)
     st.session_state["request"] = data
-    print(data)
+    #print(data)
 
     # 2. Cargar datos de los candidatos
     df_applicants = st.session_state['dfs']['cleaned_applicants']
@@ -516,28 +516,60 @@ def run():
         if df_filtered.empty:
             st.warning("No hay solicitudes con esos filtros.")
             st.stop()
-
+        
         # Mostrar tabla simplificada
-        simple_cols = ["replacement_id", "created_at", "school_name", "created_by"]
-        st.dataframe(df_filtered[simple_cols])
+        simple_cols = ["replacement_id", "created_at", "school_name", "created_by","nivel_educativo_f","asignatura_f", "fecha_inicio", "fecha_fin"]
+        # creamos columnas iguales a las de simple_cols pero con labels en español
+        simple_cols_labels = {
+            "replacement_id": "ID",
+            "created_at": "Fecha de Creación",
+            "school_name": "Institución",
+            "created_by": "Creado por",
+            "nivel_educativo_f": "Nivel Educativo",
+            "asignatura_f": "Asignatura",
+            "fecha_inicio": "Fecha Inicio",
+            "fecha_fin": "Fecha Fin"
+        }
+        # copiamos las columnas en df_filtered con los nuevos labels
+        df_simple_cols = df_filtered[simple_cols].copy()
 
-        # Selector de solicitud resultante
-        solicitud = st.selectbox(
-            "Selecciona una solicitud de la lista filtrada",
-            options=df_filtered["replacement_id"].tolist(),
-            key="request_id_select"
-        )
+        df_simple_cols = df_simple_cols.rename(columns=simple_cols_labels)
+        # Selector de solicitud resultante: al seleccionar una fila del dataframe df_simple_cols,
+        #  que se extraiga el id de la solicitud y que aparezca el botón de cargar solicitud
 
-        col_ok, col_reset = st.columns([0.2, 0.2])
-        with col_ok:
-            if st.button("Cargar solicitud", key="btn_load_req"):
-                st.session_state["request_id"] = solicitud
-                st.rerun()
-        with col_reset:
-            if st.button("Limpiar filtros", key="btn_clear_sel_req"):
-                for f in selectors:
-                    st.session_state.pop(f"selcand_cascade_{f}", None)
-                st.rerun()
+        # --- Renderizar tabla con columnas seleccionadas ---
+
+        # Seleccionar filas del dataframe df_filtered para mostrarlas en el dataframe df_simple_cols
+        # y permitir la selección de una fila
+
+        df_sc = st.dataframe(df_simple_cols, hide_index=True,
+                              use_container_width=True,
+                                selection_mode="single-row",
+                                on_select="rerun",
+                                  key="df_simple_cols")
+        
+        solicitud_id = st.session_state.get("df_simple_cols", None)
+        try:
+            solicitud_id = solicitud_id["selection"]["rows"][0]
+        except Exception as e:
+            pass
+        id_solicitud = None
+        if isinstance(solicitud_id, int):
+            id_solicitud = df_simple_cols.iloc[solicitud_id]["ID"]
+
+        
+
+            col_ok, col_reset = st.columns([0.2, 0.2])
+            with col_ok:
+                if st.button("Cargar solicitud", key="btn_load_req"):
+                    st.session_state["request_id"] = id_solicitud
+                    st.rerun()
+            with col_reset:
+                if st.button("Limpiar filtros", key="btn_clear_sel_req"):
+                    for f in selectors:
+                        st.session_state.pop(f"selcand_cascade_{f}", None)
+                    st.session_state.pop("df_simple_cols", None)
+                    st.rerun()
 
         st.stop()
     else:

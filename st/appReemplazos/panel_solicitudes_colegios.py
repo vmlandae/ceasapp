@@ -141,7 +141,7 @@ def panel_solicitudes_reemplazo(rol,institucion):
             "asignatura_f":{"header": "Asignaturas",  "field": "asignatura_f" ,  "type":"text", "width":1},
             "fecha_inicio":{"header":"Fecha Inicio",  "field":"fecha_inicio",  "type":"text", "width":0.75},
             "fecha_fin":{"header":"Fecha Fin",  "field":"fecha_fin",  "type":"text", "width":0.75},
-           # "dias_seleccionados_f":{"header":"Días",  "field":"dias_seleccionados_f",  "type":"text", "width":1},
+            "comentarios":{"header":"Comentarios",  "field":"comentarios",  "type":"text", "width":1},
         }
 
 
@@ -151,9 +151,10 @@ def panel_solicitudes_reemplazo(rol,institucion):
         
         
         column_headers = [value["header"] for key, value in columns_info_dict.items()]
+        # sacar comentarios de las columnas a mostrar
+        column_selected = ["Comentarios"]
             
-            
-        selected_columns = st.multiselect("Selecciona las columnas a mostrar", column_headers, default=column_headers)
+        selected_columns = st.multiselect("Selecciona las columnas a mostrar", column_headers, default=[i for i in column_headers if i not in column_selected], key="selected_columns")
         st.divider()
 
         for key, value in columns_info_dict.items():

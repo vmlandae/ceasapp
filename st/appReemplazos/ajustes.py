@@ -1,5 +1,5 @@
 import streamlit as st
-from ceas.utils import cleanup_applicants,debug_cleanup_applicants
+from ceas.utils import cleanup_applicants
 st.title("Ajustes")
 
 # Verificar permisos
@@ -10,8 +10,8 @@ if st.session_state.role not in ["owner", "admin"]:
 # Configuración de ajustes
 st.write("Aquí puedes configurar los ajustes de la aplicación.")
 # mostrar st.session_state['dfs']['requests']
-st.write("DataFrame de cleaned_applicants_serialized:")
-df_a = st.session_state['dfs']['cleaned_applicants_serialized']
+st.write("DataFrame de cleaned_applicants:")
+df_a = st.session_state['dfs']['cleaned_applicants'].copy()
 
 st.dataframe(df_a)
 st.divider()

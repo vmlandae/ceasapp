@@ -1122,7 +1122,10 @@ def filter_applicants_by_request(request: dict, cleaned_applicants: "pd.DataFram
 
 
     subset = cleaned_applicants.copy()
-
+    print("filter_applicants_by_request: filtering...")
+    print(request)
+    # print types of each request item
+    print("request types:", {k: type(v) for k, v in request.items()})
     # 1) Genero
     genero_req = request.get("genero", "Indiferente")
     if genero_req != "Indiferente":
@@ -1174,14 +1177,17 @@ def filter_applicants_by_request(request: dict, cleaned_applicants: "pd.DataFram
     # 4) Disponibilidad => "Completa" vs "Parcial"
     disp_type = request.get("disponibilidad","Parcial")
     days_req = request.get("dias_de_la_semana", [])
+    days_req = list(set(days_req))  # unique
     if days_req:
         if disp_type == "Completa":
+
             subset = subset[
                 subset["available_days"].apply(
                     lambda dd: all(d in dd for d in days_req)
                 )
             ]
         else:
+
             subset = subset[
                 subset["available_days"].apply(
                     lambda dd: any(d in dd for d in days_req)
@@ -1370,22 +1376,40 @@ def cleanup_applicants(df):
         newdf["subjects"] = [[] for _ in range(len(newdf))]
         newdf["subjects_raw"] = ["" for _ in range(len(newdf))]
     else:
+        # Guardamos columna original
         newdf["subjects_raw"] = newdf["subjects"].copy()
 
-        def parse_subjects(subj_str):
+        def parse_subjects_and_unparsed(subj_str):
+            """
+            Devuelve una tupla (parsed, unparsed) donde:
+              - parsed   -> lista de asignaturas válidas según cfg.ALLOWED_SUBJECTS + SPECIAL_SUBJECT
+              - unparsed -> lista de chunks que no se reconocieron
+            """
             if not isinstance(subj_str, str) or not subj_str.strip():
-                return []
-            cleaned = []
-            # Special-case long subject
+                return [], []
+
+            cleaned   = []
+            unparsed  = []
+
             special = cfg.SPECIAL_SUBJECT
+
+            # Caso especial (contiene una coma interna)
             if special in subj_str:
                 cleaned.append(special)
                 subj_str = subj_str.replace(special, "")
+
+            # Procesamos el resto por comas
             for chunk in [s.strip() for s in subj_str.split(",") if s.strip()]:
                 if chunk in cfg.ALLOWED_SUBJECTS:
                     cleaned.append(chunk)
-            return cleaned
-        newdf["subjects"] = newdf["subjects"].apply(parse_subjects)
+                else:
+                    unparsed.append(chunk)
+            return cleaned, unparsed
+
+        # Aplicamos la función y separamos en dos columnas
+        parsed_series = newdf["subjects"].apply(parse_subjects_and_unparsed)
+        newdf["subjects"] = parsed_series.apply(lambda t: t[0])
+        newdf["unparseable_subjects"] = parsed_series.apply(lambda t: t[1])
 
     # --- 5) ed_licence_level => keep raw, map con ED_MAPPING ---
     if "ed_licence_level" not in newdf.columns:
@@ -1404,204 +1428,6 @@ def cleanup_applicants(df):
             ]
         newdf["ed_licence_level"] = newdf["ed_licence_level"].apply(parse_ed_level)
 
-    return newdf
-
-
-# --- Debug helper for cleanup_applicants ---
-def debug_cleanup_applicants(df: pd.DataFrame):
-    """
-    Helper to step through cleanup_applicants logic and log shapes, dtypes, and samples
-    at each stage to help identify where errors occur.
-    """
-    
-
-    logs = []
-    def log(step_name, df_stage):
-        st.write(f"**{step_name}**: shape={df_stage.shape}")
-        if "rut" in df_stage.columns:
-            dtypes = df_stage["rut"].apply(lambda x: type(x)).value_counts().to_dict()
-            st.write(f"  - rut sample types: {dtypes}")
-            # sample invalid rut entries
-            bad = df_stage[
-                df_stage["rut"].apply(lambda x: not isinstance(x, str))
-            ].head(5)
-            if not bad.empty:
-                st.write("  - Non-str rut examples:", bad["rut"].tolist())
-        if "email" in df_stage.columns:
-            uniques = df_stage["email"].head(5).tolist()
-            st.write(f"  - email sample: {uniques}")
-        logs.append((step_name, df_stage.copy()))
-
-    # Step 0: initial
-    newdf = df.copy()
-    log("0. initial copy", newdf)
-
-    # Step 1: Email normalization
-    if "email" in newdf.columns:
-        newdf["email"] = newdf["email"].astype(str).str.lower().str.strip()
-    log("1. email normalized", newdf)
-
-    # Step 2: Rut normalization
-    if "rut" in newdf.columns:
-        newdf["rut"] = newdf["rut"].fillna("").astype(str).str.strip().str.upper()
-        newdf.loc[newdf["rut"].isin(["NAN", "NONE"]), "rut"] = ""
-    log("2. rut normalized", newdf)
-
-    # Step 3: Drop duplicates by rut (keep last)
-    if "rut" in newdf.columns:
-        nulls = newdf[newdf["rut"] == ""].copy()
-        dupes = newdf[newdf["rut"] != ""].drop_duplicates(subset=["rut"], keep="last")
-        newdf = pd.concat([dupes, nulls], ignore_index=True)
-    log("3. dropped rut duplicates", newdf)
-
-    # Step 4: Drop duplicates by email
-    newdf = newdf.drop_duplicates(subset=["email"], keep="last").reset_index(drop=True)
-        # --- 1) PHONE normalización ---
-    # Creamos 'phone_raw'
-    if "phone" in newdf.columns:
-        newdf["phone_raw"] = newdf["phone"].copy()
-    else:
-        newdf["phone_raw"] = np.nan
-
-    def normalize_phone(p):
-        if not isinstance(p, str) or not p.strip():
-            return np.nan
-        # quitar todo caracter no numérico
-        digits = re.sub(r'[^0-9]', '', p)
-        # reglas:
-        # 1) si len=11 y primeros 3='569' => '+569XXXXXXXX'
-        if len(digits) == 11 and digits.startswith("569"):
-            return f"+{digits}"
-        # 2) si len=9 y empieza con '9' => +56 + 9 => +569XXXXXXXX
-        if len(digits) == 9 and digits[0] == '9':
-            return f"+56{digits}"
-        # 3) si len=8 => +569 + 8 => +569XXXXXXXX
-        if len(digits) == 8:
-            return f"+569{digits}"
-        # en otro caso => nan
-        return np.nan
-
-    if "phone" in newdf.columns:
-        newdf["phone"] = newdf["phone"].apply(normalize_phone)
-    else:
-        newdf["phone"] = np.nan
-    log("5. phone normalized", newdf)
-    # Print type distribution after phone normalization
-    st.write("  - column types after phone normalization:")
-    for col in newdf.columns:
-        types = newdf[col].apply(lambda x: type(x)).value_counts().to_dict()
-        st.write(f"    {col}: {types}")
-    # Show phone samples after normalization
-    st.write("  - phone_raw sample:", newdf["phone_raw"].head(5).tolist())
-    st.write("  - phone normalized sample:", newdf["phone"].head(5).tolist())
-
-    # Step 6: parse undergrad_year dates
-    import datetime
-    def parse_undergrad_date(dstr):
-        try:
-            return datetime.datetime.strptime(str(dstr).strip(), "%d/%m/%Y").date()
-        except:
-            return None
-
-    if "undergrad_year" in newdf.columns:
-        newdf["undergrad_year"] = newdf["undergrad_year"].apply(parse_undergrad_date)
-    log("6. undergrad_year parsed", newdf)
-    # Print type distribution after undergrad_year parsing
-    st.write("  - column types after undergrad_year parsing:")
-    for col in newdf.columns:
-        types = newdf[col].apply(lambda x: type(x)).value_counts().to_dict()
-        st.write(f"    {col}: {types}")
-    st.write("  - undergrad_year sample:", newdf["undergrad_year"].head(5).tolist())
-
-    # Step 7: calculate anios_egreso
-    def calc_anios_egreso(dt):
-        if dt is None:
-            return None
-        today = datetime.date.today()
-        if dt > today:
-            return 0
-        diff = today.year - dt.year
-        if diff > 80:
-            return None
-        return diff
-
-    newdf["anios_egreso"] = newdf["undergrad_year"].apply(calc_anios_egreso)
-    log("7. anios_egreso calculated", newdf)
-    # Print type distribution after anios_egreso calculation
-    st.write("  - column types after anios_egreso calculation:")
-    for col in newdf.columns:
-        types = newdf[col].apply(lambda x: type(x)).value_counts().to_dict()
-        st.write(f"    {col}: {types}")
-    st.write("  - anios_egreso sample:", newdf["anios_egreso"].head(5).tolist())
-
-    # Step 8: parse available_days
-    def parse_days_and_translate(x):
-        if not isinstance(x, str) or not x.strip():
-            return []
-        return [cfg.DAY_MAP.get(d.strip(), d.strip()) for d in x.split(",") if d.strip()]
-
-    if "available_days" in newdf.columns:
-        # check if days are written in English
-        if all(day in cfg.DAY_MAP.values() for day in newdf["available_days"].dropna().unique()):
-            # already in spanish, no need to pase
-            pass
-        else:
-            # parse and translate to Spanish
-            newdf["available_days"] = newdf["available_days"].astype(str).apply(parse_days_and_translate)
-        
-    log("8. available_days parsed", newdf)
-    # Print type distribution after available_days parsing
-    st.write("  - column types after available_days parsing:")
-    for col in newdf.columns:
-        types = newdf[col].apply(lambda x: type(x)).value_counts().to_dict()
-        st.write(f"    {col}: {types}")
-    st.write("  - available_days sample:", newdf["available_days"].head(5).tolist())
-
-    # Step 9: parse subjects
-    special = cfg.SPECIAL_SUBJECT
-    to_keep = cfg.ALLOWED_SUBJECTS
-
-    def parse_subjects(subj_str):
-        if not isinstance(subj_str, str):
-            return []
-        cleaned = []
-        if special in subj_str:
-            cleaned.append(special)
-            subj_str = subj_str.replace(special, "")
-        for chunk in [s.strip() for s in subj_str.split(",") if s.strip()]:
-            if chunk in to_keep:
-                cleaned.append(chunk)
-        return cleaned
-
-    if "subjects" in newdf.columns:
-        newdf["subjects"] = newdf["subjects"].apply(parse_subjects)
-    log("9. subjects parsed", newdf)
-    # Print type distribution after subjects parsing
-    st.write("  - column types after subjects parsing:")
-    for col in newdf.columns:
-        types = newdf[col].apply(lambda x: type(x)).value_counts().to_dict()
-        st.write(f"    {col}: {types}")
-    st.write("  - subjects sample:", newdf["subjects"].head(5).tolist())
-
-    # Step 10: parse ed_licence_level
-    mapping = cfg.ED_MAPPING
-
-    def parse_ed_level(ed_str):
-        if not isinstance(ed_str, str):
-            return []
-        return [mapping.get(chunk.strip()) for chunk in ed_str.split(",") if chunk.strip() in mapping]
-
-    if "ed_licence_level" in newdf.columns:
-        newdf["ed_licence_level"] = newdf["ed_licence_level"].apply(parse_ed_level)
-    log("10. ed_licence_level parsed", newdf)
-    # Print type distribution after ed_licence_level parsing
-    st.write("  - column types after ed_licence_level parsing:")
-    for col in newdf.columns:
-        types = newdf[col].apply(lambda x: type(x)).value_counts().to_dict()
-        st.write(f"    {col}: {types}")
-    st.write("  - ed_licence_level sample:", newdf["ed_licence_level"].head(5).tolist())
-
-    # Final: return the fully-processed DataFrame
     return newdf
 
 # transformar listas en dummies

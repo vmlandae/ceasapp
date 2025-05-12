@@ -57,18 +57,23 @@ ALLOWED_SUBJECTS = {
     "Artes Visuales",
     "Biología",
     "Ciencias Naturales",
-    "Ciencias Sociales",
-    "Educación Física",
+    
+    "Educación Física y Salud",
     "Filosofía",
-    "Física",
-    "Formación Ciudadana",
-    "Historia",
+    "Física (CN)",
+    "Tecnología",
     "Inglés",
     "Lenguaje y Comunicación",
     "Matemática",
-    "Música y Artes",
+    "Artes Musicales",
     "Química",
-    "TP - Contabilidad"
+    "Orientación",
+    "Religión",
+
+    "TP - Contabilidad",
+    "TP - Mecánica Automotriz",
+    "TP - Electricidad",
+    "TP - Contabilidad",
 }
 # When a subject string contains this full text (including commas), treat as single subject
 SPECIAL_SUBJECT = "Historia, geografía y Ciencias Sociales"

@@ -140,13 +140,15 @@ def process_requests_from_gsheet(df):
         cfg.SCHOOL_NAME_MAP,
         cfg.ED_MAPPING
     )
+    
     # Inicializar columnas nuevas
+    df_clean['dias_de_la_semana'] = df_clean['dias_de_la_semana'].apply(lambda x: x.split(", ") if isinstance(x, str) else [])
     df_clean['dias_seleccionados'] = None
-    df_clean['dias_de_la_semana'] = None
+    
     df_clean['school_id'] = None
     # Cálculo de días hábiles y asignación de school_id
     for i, row in df_clean.iterrows():
-        dias = get_days_between_dates(row["fecha_inicio"], row["fecha_fin"])
+        dias = get_days_between_dates(row["fecha_inicio"], row["fecha_fin"],row["dias_de_la_semana"])
         df_clean.at[i, "dias_seleccionados"] = [d.strftime("%Y-%m-%d") for d in dias["days"]]
         df_clean.at[i, "dias_de_la_semana"] = dias["str_weekdays"]
         df_clean.at[i, "school_id"] = st.session_state["dfs"]["schools"] \
@@ -343,20 +345,7 @@ def create_request_dict(form_reemplazo_data:dict ) -> dict:
     return request_dict
 
 
-    # # usar el registro para filtrar los candidatos
-    
-    # cleaned_applicants = st.session_state['dfs']['cleanapplicants'].copy()
-    # filtered_applicants = filter_applicants_by_request(request_dict, cleaned_applicants)
-
-
-
-    # # # guardar los candidatos filtrados en un pickle
-    # # # para poder revisar el filtered_applicants en caso de error
-
-    # # filename = f"filtered_applicants_{int(request_dict["replacement_id"])}.pickle"
-    # # path = cfg.INTERIM_DATA_DIR / "requests" / filename
-    # # with open(path, "wb") as f:
-    # #     pickle.dump(filtered_applicants, f)
+   
 
 def create_replacement_request( request_dict: dict, df_requests: pd.DataFrame,save_pickle:bool = False) -> tuple: 
     # Calculate replacement_id directly from df_requests argument
@@ -470,74 +459,80 @@ def on_enviar_correo(row,data):
         st.info("Cancelado.")
         time.sleep(2)
         st.rerun()
-def get_days_between_dates(date1: str, date2: str):
+def get_days_between_dates(
+    date1: str,
+    date2: str,
+    days_of_the_week: list = None
+) -> dict:
     """
-    extrae los días entre dos fechas, contando la fecha inicial y la fecha final, y excluyendo los fines de semana y festivos en Chile.
-    retorna un diccionario con las siguientes llaves:
-    
-    - "days": una lista con los días hábiles entre las dos fechas incluidas, en formato 'YYYY-MM-DD'.
-    - "str_days": una lista con los días hábiles entre las dos fechas incluidas en formato "27 de Marzo" para  2025-03-27, etc.
-    - "weekdays": una lista con los días de la semana correspondientes a los días hábiles, en formato datetime
-    - "str_weekdays": una lista con los días de la semana correspondientes a los días hábiles en formato "Lunes", "Martes", etc.
+    Retorna los días comprendidos entre `date1` y `date2` (inclusive) que:
+      1. Sean días hábiles (lunes‑viernes) *y*
+      2. Pertenezcan a `days_of_the_week`, si se especifica.
 
-    
+    Args
+    ----
+    date1 : str | datetime
+        Fecha inicio en formato 'YYYY-MM-DD' o similar.
+    date2 : str | datetime
+        Fecha fin en formato 'YYYY-MM-DD'.
+    days_of_the_week : list[str] | None
+        Lista de nombres de día en español ("Lunes", …). Si es None,
+        se asume lunes‑viernes.
 
+    Returns
+    -------
+    dict con:
+        - "days": DatetimeIndex de pandas con los días seleccionados
+        - "str_days": lista '27 de Marzo'
+        - "weekdays": lista datetime.datetime
+        - "str_weekdays": lista de nombres en español
+    """
+    # Desactivar FutureWarnings de pandas
+    pd.options.mode.chained_assignment = None
 
-    Args:
-        date1 (str): Fecha inicial en formato 'YYYY-MM-DD'.
-        date2 (str): Fecha final en formato 'YYYY-MM-DD'.
-
-    Returns:
-        dict: Diccionario con las llaves "days", "str_days", "weekdays", "str_weekdays".
-
-    """ 
-    # desactivar los FutureWarnings de pandas
-    pd.options.mode.chained_assignment = None  # default='warn'
-        # Convertimos las fechas a objetos datetime
     date1 = pd.to_datetime(date1)
     date2 = pd.to_datetime(date2)
 
-    
-    # en la librería 'holidays' se encuentran los festivos en Chile
-    current_date = datetime.datetime.now()
-    current_year = current_date.year
-    chilean_holidays = holidays.country_holidays(country="CL",years=current_year,observed=True)
-    
+    # Lista default lunes‑viernes
+    if days_of_the_week is None:
+        days_of_the_week = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes"]
 
-    
-    # Extraemos los días hábiles entre las dos fechas
-    days = pd.date_range(date1, date2, freq='B') # freq='B' es para extraer solo los días hábiles
-    
-    # luego filtramos los días que no sean festivos
-    # TODO: arreglamos FutureWarning: "the behavior of 'isin' with dtype='datetime64[ns]' and castable values (e.g. strings) is deprecated and will raise in a future version. Use 'pd.to_datetime' to convert the values to datetime64[ns] before calling 'isin'."
+    # Holidays de Chile para el año en cuestión (y siguiente si cruza)
+    years_needed = list(range(date1.year, date2.year + 1))
+    ch_holidays = holidays.country_holidays("CL", years=years_needed, observed=True)
+    holiday_idx = pd.to_datetime(list(ch_holidays.keys()))
 
-    days = days[~days.isin(chilean_holidays.keys())]
-    
-    str_days = days.strftime('%d de %B').tolist()
-    str_weekdays = days.strftime('%A').tolist()
-    # convertimos str_weekdays a español si es necesario
-    en_days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
-    day_map = {
+    # Generar todos los días hábiles (lunes‑viernes) entre fechas
+    biz_days = pd.date_range(date1, date2, freq="B")
+
+    # Excluir festivos (convertimos ambos a datetime64 para evitar FutureWarning)
+    biz_days = biz_days[~biz_days.isin(holiday_idx)]
+
+    # Map ingles→español para weekday names
+    en_to_es = {
         "Monday": "Lunes",
         "Tuesday": "Martes",
         "Wednesday": "Miércoles",
         "Thursday": "Jueves",
-        "Friday": "Viernes"
+        "Friday": "Viernes",
+        "Saturday": "Sábado",
+        "Sunday": "Domingo",
     }
-    # si algún día está en inglés, lo convertimos
-    for day in str_weekdays:
-        if day in en_days:
-            str_weekdays[str_weekdays.index(day)] = day_map[day]
-            
-    
 
+    # Filtrar por días solicitados
+    keep_mask = biz_days.strftime("%A").map(en_to_es.get).isin(days_of_the_week)
+    selected = biz_days[keep_mask]
 
-    
-    weekdays = days.to_pydatetime().tolist()
-    
-    return {"days": days, "str_days": str_days, "weekdays": weekdays, "str_weekdays": str_weekdays}
+    str_days = selected.strftime("%d de %B").tolist()
+    str_weekdays_es = selected.strftime("%A").map(en_to_es).tolist()
+    weekdays_py = selected.to_pydatetime().tolist()
 
-    
+    return {
+        "days": selected,
+        "str_days": str_days,
+        "weekdays": weekdays_py,
+        "str_weekdays": str_weekdays_es,
+    }
 def validate_email(email: str,domain = None) -> bool:
     """
     Valida si un email es válido o no.
@@ -1100,9 +1095,12 @@ def filter_applicants_by_request(request: dict, cleaned_applicants: "pd.DataFram
     4. disponibilidad (Completa vs. Parcial):
        - "Completa" => applicant["available_days"] contiene *todos* los días en request["dias_de_la_semana"].
        - "Parcial" => al menos un día.
-    5. anios_egreso => applicant["anios_egreso"] >= request["anios_egreso"] (si es > 0).
-    6. (Comentado) comuna_residencia => no implementado ahora.
-    7. (Comentado) horarios => no implementado (applicants no tienen horarios).
+    5. dias_de_la_semana:
+       - Si hay días seleccionados, se filtra por ellos.
+       - Si no hay días seleccionados, se ignora el filtro.
+    6. anios_egreso => applicant["anios_egreso"] >= request["anios_egreso"] (si es > 0).
+    7. (Comentado) comuna_residencia => no implementado ahora.
+    8. (Comentado) horarios => no implementado (applicants no tienen horarios).
 
     Args:
         request (dict): 
@@ -1191,6 +1189,11 @@ def filter_applicants_by_request(request: dict, cleaned_applicants: "pd.DataFram
                     lambda dd: any(d in dd for d in days_req)
                 )
             ]
+    # 5) Filtrar por días seleccionados
+    #    (si hay días seleccionados, se filtra por ellos)
+    #    (si no hay días seleccionados, se ignora el filtro)
+
+
 
     # 5) anios_egreso
     req_anios = request.get("anios_egreso", 0)
@@ -1217,11 +1220,12 @@ def find_unprocessed_gform_requests(
     df_exist_gf = df_existing[df_existing["created_with"] == "gform"].copy()
     if df_exist_gf.empty:
         return df_gform.copy()
-
+    print(df_exist_gf['created_at'])
     # Normalizar timestamps y construir claves únicas
+    
     df_exist_gf["created_at_dt"] = pd.to_datetime(
-        df_exist_gf["created_at"], dayfirst=True, errors="coerce"
-    )
+        df_exist_gf["created_at"])
+    print(df_exist_gf["created_at_dt"])
     df_exist_gf["__key"] = df_exist_gf.apply(
         lambda r: f"{r['created_at_dt'].strftime('%Y-%m-%d %H:%M:%S')}|{r['created_by']}|{r['school_name']}",
         axis=1
@@ -1425,6 +1429,9 @@ def cleanup_applicants(df):
                 if chunk.strip() in cfg.ED_MAPPING.keys()
             ]
         newdf["ed_licence_level"] = newdf["ed_licence_level"].apply(parse_ed_level)
+    
+    # --- 6) full_name of applicant ---
+    newdf["full_name"] = newdf["first_name"].astype(str) + " " + newdf["last_name"].astype(str)
 
     return newdf
 

@@ -71,13 +71,19 @@ def form_crear_solicitud_reemplazo(rol,institucion):
                     # Fecha de fin: date_input
                     fecha_fin = st.date_input("Fecha de Fin", key="fecha_fin",min_value=datetime.date.today())
                     st.session_state['form_reemplazo_data']["fecha_fin"] = fecha_fin
+                    # Días de la semana: checkbox para cada día de la semana
+                    # lunes, martes, miércoles, jueves, viernes
+                    dias_de_la_semana = st.multiselect("Días de la semana", options=["Lunes", "Martes", "Miércoles", "Jueves", "Viernes"], key="dias_de_la_semana", default=["Lunes", "Martes", "Miércoles", "Jueves", "Viernes"])
+                    st.session_state['form_reemplazo_data']["dias_de_la_semana"] = dias_de_la_semana
+
+
                     st.divider()
                     
 
                     # bloque horario: Indicar horario de inicio y fin de la jornada por día
                     # primero, extraer los días seleccionados entre fecha de inicio y fecha de fin. 
                     # Considerar que se deben mostrar los días de la semana (sacando sábado y domingo) entre las fechas seleccionadas, incluyendo la fecha de inicio y fin
-                    dias_seleccionados = get_days_between_dates(fecha_inicio, fecha_fin)
+                    dias_seleccionados = get_days_between_dates(fecha_inicio, fecha_fin, dias_de_la_semana)
 
                     # st.write con los días que necesitan reemplazo (días de la semana entre fecha de inicio y fecha de fin que no sean sábado ni domingo ni feriado)
                     # unir dias_seleccionados["str_weekdays"] y dias_seleccionados["str_days"] con un espacio

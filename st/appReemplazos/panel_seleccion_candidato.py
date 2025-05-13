@@ -2,7 +2,8 @@
 import streamlit as st
 import copy
 from ceas import schools_manager
-from ceas.config import INTERIM_DATA_DIR
+
+from ceas.config import INTERIM_DATA_DIR, TEMPLATES_DIR
 import pandas as pd
 import numpy as np
 # --- Extra imports for email dialog ---
@@ -19,7 +20,7 @@ from ceas.utils import (
     filter_df_by_filters,
 )
 # --- Ensure these imports for cascade filters and request formatting ---
-from ceas.serialize_data import deserialize_request_from_sheets, format_request_for_panel_display,format_candidates_for_panel_display
+from ceas.serialize_data import deserialize_request_from_sheets, format_request_for_panel_display,format_candidates_for_panel_display, format_request_data_for_email
 from ceas.utils import render_cascade_filters, build_selector_definitions, filter_df_by_filters
 # --- Extra imports for email dialog ---
 from jinja2 import Environment, FileSystemLoader, select_autoescape
@@ -52,28 +53,37 @@ def get_selected_rows(df: pd.DataFrame, key_prefix: str = "panel_seleccion_candi
 # --- Dialog para enviar el correo ---
 def show_email_dialog(selected_df: pd.DataFrame, request_data: dict):
     """Abre un diálogo con plantilla editable y control de destinatarios."""
-    @st.dialog("Enviar Correo a Candidatos", width="large")
+    rd = format_request_data_for_email(request_data)
+    #rd = request_data
+    @st.dialog("Enviar correo adjuntando candidatos", width="large")
     def _dlg():
+        request_data =  rd
+        # debuging
+        #st.write("selected_df", selected_df)
+        #st.write(rd)
+        st.markdown(f"#### {request_data['school_name']}")
+        st.dataframe(st.session_state["dfs"]["users"].query("school_name==@request_data['school_name']")[['email','name','cargo']],hide_index=True)
         # --- Destinatarios ---
         col1, col2, col3 = st.columns(3)
         with col1:
             to_val = st.text_input("Para", value=request_data.get("created_by", ""), key="dlg_to")
         with col2:
-            cc_val = st.text_input("CC", value="", key="dlg_cc")
+            cc_val = st.text_input("CC", value="personas@ceas.cl", key="dlg_cc")
         with col3:
-            bcc_val = st.text_input("BCC", value="", key="dlg_bcc")
+            bcc_val = st.text_input("CCO", value="", key="dlg_bcc")
 
         # --- Asunto ---
-        subj_default = f"Candidatos solicitud {request_data['replacement_id']} - {request_data['school_name']}"
+         
+        subj_default = f"CV disponibles - Reemplazo docente - Solicitud {int(request_data['replacement_id'])} -{request_data['asignatura']} - {request_data['school_name']}"
         subject = st.text_input("Asunto", value=subj_default, key="dlg_subj")
 
         # --- Cuerpo (template Jinja2) ---
         env = Environment(
-            loader=FileSystemLoader(str(INTERIM_DATA_DIR.parent)),
+            loader=FileSystemLoader(str(TEMPLATES_DIR)),
             autoescape=select_autoescape()
         )
         cand_list = [
-            f"{r['first_name']} {r['last_name']} ({r['email']})"
+            f"- {r['first_name']} {r['last_name']} ({r['email']})"
             for _, r in selected_df.iterrows()
         ]
         dias = request_data.get("dias_seleccionados", [])
@@ -84,7 +94,6 @@ def show_email_dialog(selected_df: pd.DataFrame, request_data: dict):
                 solicitante=request_data["created_by"],
                 asignatura=request_data["asignatura"],
                 nivel_educativo=request_data["nivel_educativo"],
-                dias=dias,
                 lista_candidatos="\n".join(cand_list),
             )
         except Exception:
@@ -114,6 +123,7 @@ def show_email_dialog(selected_df: pd.DataFrame, request_data: dict):
         col_ok, col_cancel = st.columns(2)
         with col_ok:
             if st.button("Enviar", key="dlg_send"):
+                
                 # Se delega a send_candidates_email para enviar
                 try:
                     from ceas.reemplazos.gmail import send_candidates_email
@@ -138,7 +148,7 @@ def show_email_dialog(selected_df: pd.DataFrame, request_data: dict):
         with col_cancel:
             if st.button("Cancelar", key="dlg_cancel"):
                 st.info("Cancelado.")
-
+    _dlg()
 def load_request(load_from:str, solicitud:int) -> pd.DataFrame:
     """
     Cargar la solicitud desde un pickle o desde la base de datos.
@@ -233,8 +243,7 @@ def panel(solicitud):
         available_columns = [
             {"header": "", "type": "custom", "render_fn": checkbox_render_fn, "width": 0.3},
             {"header": "Email", "field": "email", "type": "text", "width": 2},
-            {"header": "Nombre", "field": "first_name", "type": "text", "width": 1},
-            {"header": "Apellido", "field": "last_name", "type": "text", "width": 1},
+            {"header": "Nombre", "field": "full_name", "type": "text", "width": 1},
             {"header": "Teléfono", "field": "phone", "type": "text", "width": 1},
             {"header": "Comuna", "field": "comuna_residencia", "type": "text", "width": 1},
             {"header": "Años de egreso", "field": "anios_egreso", "type": "text", "width": 1},
@@ -258,7 +267,7 @@ def panel(solicitud):
         # Botón de correo
         selected_df = get_selected_rows(df_manual, key_prefix="manual_panel")
         if not selected_df.empty:
-            if st.button("Enviar Correo", key="btn_send_email_manual"):
+            if st.button("Enviar CVs", key="btn_send_email_manual"):
                 # request_data vacío -> usar dict con valores mínimos
                 pseudo_req = {"created_by":"", "school_name":"", "replacement_id":"manual",
                               "asignatura": sel_subjects, "nivel_educativo": sel_ed,
@@ -274,18 +283,21 @@ def panel(solicitud):
             st.session_state["request_id"] = None
             st.rerun()
         # solicitante, institución, fecha de creación de solicitud
-        c1, c2, c3,c4 = st.columns([2,1, 1,2])
+        c1, c3, c4 = st.columns([2,1,2])
+        #c3,
+        
         with c1:
             st.write(f"Solicitante: {data['created_by']}")
             st.write(f"Institución: {data['school_name']}")
             st.write(f"Fecha de creación: {data['created_at']}")
             st.write(f"Fecha de procesamiento: {data['processed_at']}")
-        # Si la solicitud fue creada por un usuario de la oficina central, mostrar el nombre de la oficina
-        with c2:
             st.write(f"Origen: {data['created_with']}")
             st.write(f"Fecha de inicio: {data['fecha_inicio']}")
             st.write(f"Fecha de fin: {data['fecha_fin']}")
-            st.write(f"Estado: {data['status']}")
+        # Si la solicitud fue creada por un usuario de la oficina central, mostrar el nombre de la oficina
+        # with c2:
+            
+        #     st.write(f"Estado: {data['status']}")
         with c3:
             # Nivel y asignatura(s), imprimir key y values para cada key
             st.write("Nivel educativo y asignaturas:")
@@ -419,8 +431,8 @@ def panel(solicitud):
         available_columns = [
             {"header": "", "type": "custom", "render_fn": checkbox_render_fn, "width": 0.3},
             {"header": "Email", "field": "email", "type": "text", "width": 2},
-            {"header": "Nombre", "field": "first_name", "type": "text", "width": 1},
-            {"header": "Apellido", "field": "last_name", "type": "text", "width": 1},
+            {"header": "Nombre", "field": "full_name", "type": "text", "width": 1},
+
             {"header": "Teléfono", "field": "phone", "type": "text", "width": 1},
             {"header": "Comuna", "field": "comuna_residencia", "type": "text", "width": 1},
             {"header": "Años eg.", "field": "anios_egreso_f", "type": "text", "width": 0.5},
@@ -429,7 +441,7 @@ def panel(solicitud):
             {"header": "Asignaturas", "field": "subjects_f", "type": "text", "width": 1},
             {"header": "Universidad", "field": "university", "type": "text", "width": 1},
             {"header": "Días de la semana", "field": "available_days_f", "type": "text", "width": 1},
-            {"header": "Horas a la semana", "field": "max_hours_per_week_f", "type": "text", "width": 1},
+            {"header": "Horas", "field": "max_hours_per_week_f", "type": "text", "width": 1},
             
             
             {"header": "CV", "type": "custom", "render_fn": cv_link_render_fn, "width": 1},
@@ -444,7 +456,7 @@ def panel(solicitud):
         for col_cfg in available_columns[1:]:
             if col_cfg["header"] in selected:
                 columns_info.append(col_cfg)
-        c1,c2 = st.columns([0.8,0.1])
+        c1,c2 = st.columns([0.9,0.1])
         with c1:
             create_columns_panel(
                 df_filtered_applicants_formatted,
@@ -457,7 +469,7 @@ def panel(solicitud):
                 # --- Botón para enviar correo si hay selección ---
             selected_df = get_selected_rows(df_filtered_applicants)
             if not selected_df.empty:
-                if st.button("Enviar Correo", key="btn_send_email"):
+                if st.button("Enviar CVs", key="btn_send_email"):
                     show_email_dialog(selected_df, req)
 
 def run():

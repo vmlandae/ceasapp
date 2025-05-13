@@ -155,13 +155,14 @@ def new_user_panel():
         {"header":"Email",   "field":"email", "type":"text", "width":2},
         {"header":"Nombre",  "field":"name",  "type":"text", "width":1},
         {"header":"Institución",  "field":"school_name","type":"text", "width":1},
-        {"header":"Fecha de creación del usuario",  "field":"role","type":"text", "width":1},
-        {"header":"Código de validación",  "field":"validation_code","type":"text", "width":1},
-        {"header":"Enviar código", "button_label":"Enviar", "type":"button", "width":1}, # se desactiva el botón si ya se ha enviado el código
-        {"header": "Fecha de envío", "field":"code_sent_at", "type":"text", "width":1},
-        {"header": "Estado validación", "field":"confirmation", "type":"text", "width":1},
-        {"header":"Fecha de confirmación", "field":"confirmed_at", "type":"text", "width":1},
-        {"header": "Confirmado por", "field":"confirmed_by", "type":"text", "width":1},
+        {"header":"Area",  "field":"area","type":"text", "width":1},
+        {"header":"Cargo",  "field":"cargo","type":"text", "width":1},
+        #{"header":"Código de validación",  "field":"validation_code","type":"text", "width":1},
+        #{"header":"Enviar código", "button_label":"Enviar", "type":"button", "width":1}, # se desactiva el botón si ya se ha enviado el código
+        #{"header": "Fecha de envío", "field":"code_sent_at", "type":"text", "width":1},
+        #{"header": "Estado validación", "field":"confirmation", "type":"text", "width":1},
+        #{"header":"Fecha de confirmación", "field":"confirmed_at", "type":"text", "width":1},
+        #{"header": "Confirmado por", "field":"confirmed_by", "type":"text", "width":1},
         {"header": "Confirmación manual", "button_label":"Confirmar", "type":"button", "width":1},
         
     ]

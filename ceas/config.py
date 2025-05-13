@@ -19,6 +19,9 @@ MODELS_DIR = PROJ_ROOT / "models"
 REPORTS_DIR = PROJ_ROOT / "reports"
 FIGURES_DIR = REPORTS_DIR / "figures"
 
+# JINJA2 TEMPLATES DIR
+TEMPLATES_DIR = DATA_DIR / "jinja2_templates"
+
 # gform_map.json is a json file that contains the mapping of columns in the google form to the columns in the data
 with open(PROJ_ROOT / "gform_map.json" ) as f:
     GFORM_MAP = json.load(f)

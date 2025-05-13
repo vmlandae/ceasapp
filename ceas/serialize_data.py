@@ -134,3 +134,27 @@ def read_all_dataframes(sheet_name_list: list, connection) -> dict:
         df = connection.read(worksheet=sheet_name,max_entries=1)
         dataframes[sheet_name] = df
     return dataframes
+
+def format_request_data_for_email(request: dict) -> dict:
+    """
+    Formatea los datos de la solicitud para el correo electrónico.
+    Convierte listas y diccionarios a cadenas de texto.
+    """
+    # Convertir listas a cadenas de texto
+    for key, value in request.items():
+        if isinstance(value, list):
+            request[key] = ", ".join(value)
+        # diccionarios que tienen como keys strings y como valores listas
+        # extraemos los valores de las listas, hacemos set y luego list para eliminar duplicados y luego unimos con comas
+        elif isinstance(value, dict):
+            # Convertir diccionario a cadena de texto
+            # extraer los valores de las listas, hacer set y luego list para eliminar duplicados y luego unimos con comas
+            request[key] = ", ".join(set([item for sublist in value.values() for item in sublist]))     
+        elif isinstance(value, datetime.datetime):
+            # Convertir datetime a cadena de texto
+            request[key] = value.strftime("%Y-%m-%d %H:%M:%S")
+        elif isinstance(value, datetime.date):
+            # Convertir fecha a cadena de texto
+            request[key] = value.strftime("%Y-%m-%d")
+    return request
+    

@@ -53,14 +53,17 @@ def drive_to_download(url: str) -> str:
 st.title("Panel de Selección de Candidatos")
 
 def checkbox_render_fn(row, disabled=True, widget_key=None, *_, **__):
-    sent = st.session_state.get("sent_set_current", set())
-    already = row["email"] in sent
+    """
+    Renderiza un checkbox; se etiqueta "Enviado" si ya fue enviado,
+    pero siempre permanece habilitado.
+    """
+    already = row["email"] in st.session_state.get("sent_set_current", set())
     st.checkbox(
         "Enviado" if already else "Seleccionar",
         key=widget_key,
         value=False,
         label_visibility="collapsed",
-        disabled=disabled or already,
+        disabled=disabled  # do not disable when already sent
     )
 def cv_link_render_fn(row,disabled=True,widget_key=None,*args, **kwargs):
     """
@@ -234,6 +237,17 @@ def show_email_dialog(selected_df: pd.DataFrame, request_data: dict):
                         sent.update(selected_df["email"].tolist())
                         st.session_state["sent_cvs"][req_id] = sent
                         append_sent_cvs(req_id, list(selected_df["email"]))
+                        # --- PATCH B: Registrar en EmailLog ---
+                        from ceas.utils import append_email_log
+                        append_email_log(
+                            replacement_id=request_data["replacement_id"],
+                            to=to_val,
+                            cc=cc_val,
+                            bcc=bcc_val,
+                            subject=subject,
+                            body=body,
+                            attachments=[att["filename"] for att in attachments]
+                        )
                         time.sleep(2)
                         st.rerun()
                     else:
@@ -534,10 +548,14 @@ def panel(solicitud):
         # Selector de columnas a mostrar
         available_columns = [
             {"header": "", "type": "custom", "render_fn": checkbox_render_fn, "width": 0.3},
-            {"header": "Enviado", "field": "Enviado", "type": "text", "width": 0.6},
+            # Only show "Enviado" if at least one has been marked
+            *(
+                [{"header": "Enviado", "field": "Enviado", "type": "text", "width": 1}]
+                if df_filtered_applicants_formatted["Enviado"].eq("Sí").any()
+                else []
+            ),
             {"header": "Email", "field": "email", "type": "text", "width": 2},
             {"header": "Nombre", "field": "full_name", "type": "text", "width": 1},
-
             {"header": "Teléfono", "field": "phone", "type": "text", "width": 1},
             {"header": "Comuna", "field": "comuna_residencia", "type": "text", "width": 1},
             {"header": "Años eg.", "field": "anios_egreso_f", "type": "text", "width": 0.5},
@@ -547,21 +565,29 @@ def panel(solicitud):
             {"header": "Universidad", "field": "university", "type": "text", "width": 1},
             {"header": "Días de la semana", "field": "available_days_f", "type": "text", "width": 1},
             {"header": "Horas", "field": "max_hours_per_week_f", "type": "text", "width": 1},
-            
-            
             {"header": "CV", "type": "custom", "render_fn": cv_link_render_fn, "width": 1},
         ]
         # Multiselect para elegir columnas (excluyendo la primera custom)
         col_headers = [c["header"] for c in available_columns[1:]]
-
-        selected = st.multiselect("Selecciona columnas a mostrar", col_headers, default=col_headers)
+        # Determinar columnas por defecto
+        default_cols_base = ["Email", "Nombre", "Asignaturas", "Comuna", "CV"]
+        if any(c["header"] == "Enviado" for c in available_columns):
+            default_cols = ["Enviado"] + default_cols_base
+        else:
+            default_cols = default_cols_base
+        selected = st.multiselect(
+            "Selecciona columnas a mostrar",
+            col_headers,
+            default=default_cols,
+            key="cols_to_show",
+        )
 
         # Construir columns_info según selección
         columns_info = [available_columns[0]]  # checkbox siempre primero
         for col_cfg in available_columns[1:]:
             if col_cfg["header"] in selected:
                 columns_info.append(col_cfg)
-        c1,c2 = st.columns([0.9,0.1])
+        c1, c2 = st.columns([0.9, 0.1])
         with c1:
             create_columns_panel(
                 df_filtered_applicants_formatted,
@@ -571,7 +597,7 @@ def panel(solicitud):
             )
 
         with c2:
-                # --- Botón para enviar correo si hay selección ---
+            # --- Botón para enviar correo si hay selección ---
             selected_df = get_selected_rows(df_filtered_applicants)
             if not selected_df.empty:
                 if st.button("Enviar CVs", key="btn_send_email"):

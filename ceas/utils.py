@@ -286,7 +286,7 @@ def create_clean_applicants_sheet(df_applicants: pd.DataFrame, write_to_gsheet: 
         # # 2. Convertir serialized_row a un DataFrame
         df_serialized_cleaned_applicants = pd.DataFrame(serialized_cleaned_applicants_dict).T
         try:        
-            #print(df_serialized_cleaned_applicants.head())
+            
             conn.update(data=df_serialized_cleaned_applicants, worksheet=st.session_state["app_name"] + "CleanApplicants")
             
         except Exception as e:
@@ -541,6 +541,80 @@ def get_days_between_dates(
         "weekdays": weekdays_py,
         "str_weekdays": str_weekdays_es,
     }
+
+# =================================================================
+# Registro de envíos de correo (EmailLog)
+# =================================================================
+
+def _get_email_log_conn() -> "GSheetsConnection":
+    """
+    Devuelve conexión a la hoja que registra envíos de correo.
+    Usa la misma convención: <app_name>EmailLog.
+    """
+    if "connections" not in st.session_state:
+        raise RuntimeError("No hay conexiones en session_state para EmailLog.")
+    rand = random.choice(st.session_state["connections"])
+    return st.connection(rand, type=GSheetsConnection, ttl=0, max_entries=1)
+
+def _email_log_sheet_name() -> str:
+    return f"{st.session_state['app_name']}EmailLog"
+
+def load_email_log_df() -> pd.DataFrame:
+    """
+    Lee la hoja EmailLog y devuelve DataFrame con columnas clave.
+    """
+    try:
+        conn = _get_email_log_conn()
+        df = conn.read(worksheet=_email_log_sheet_name())
+        if df is None or df.empty:
+            cols = [
+                "timestamp", "sent_by", "replacement_id",
+                "to", "cc", "bcc", "subject",
+                "body", "attachments"
+            ]
+            return pd.DataFrame(columns=cols)
+        return df
+    except Exception:
+        cols = [
+            "timestamp", "sent_by", "replacement_id",
+            "to", "cc", "bcc", "subject",
+            "body", "attachments"
+        ]
+        return pd.DataFrame(columns=cols)
+
+def append_email_log(
+    replacement_id: int,
+    to: str,
+    cc: str,
+    bcc: str,
+    subject: str,
+    body: str,
+    attachments: list[str]
+) -> None:
+    """
+    Agrega un registro de envío de correo a EmailLog.
+    attachments: lista de nombres de archivo adjunto.
+    """
+    df_exist = load_email_log_df()
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    sent_by = st.session_state.get("user_info", {}).get("email", "")
+    new_row = {
+        "timestamp": timestamp,
+        "sent_by": sent_by,
+        "replacement_id": replacement_id,
+        "to": to,
+        "cc": cc or "",
+        "bcc": bcc or "",
+        "subject": subject,
+        "body": body,
+        "attachments": ", ".join(attachments)
+    }
+    df_upd = pd.concat([df_exist, pd.DataFrame([new_row])], ignore_index=True)
+    try:
+        conn = _get_email_log_conn()
+        conn.update(data=df_upd, worksheet=_email_log_sheet_name())
+    except Exception as e:
+        print(f"[EmailLog] Error al actualizar: {e}")
 
 # =================================================================
 # Registro de CVs enviados por solicitud (SentCVs)
@@ -964,9 +1038,9 @@ columns_config = [
 
                 # Possibly a dictionary describing the "on_click"
                 on_click_dict = col_cfg.get("on_click", None)
-                #print("on_click_dict:",on_click_dict)
+                
                 if isinstance(on_click_dict, dict):
-                    #print("on_click_dict is a dict:")
+                
                     onclick_callable = on_click_dict.get("callable", None)
                     onclick_args = on_click_dict.get("args", [])
                     onclick_kwargs = on_click_dict.get("kwargs", {})
@@ -984,7 +1058,27 @@ columns_config = [
 
                 # handle different ctype
                 if ctype == "text":
-                    st.write(value if value is not None else "-")
+                    # Special rendering for "Enviado" field as a red button-like badge
+                    if field == "Enviado":
+                        # Render a red "Enviado" button-like badge (non-interactive)
+                        if row.get("email") in st.session_state.get("sent_set_current", set()):
+                            html_button = (
+                                "<button style='background-color:#e63946; color:white; "
+                                "border:none; padding:4px 10px; border-radius:4px; "
+                                "font-weight:bold;'>Enviado</button>"
+                            )
+                            st.markdown(html_button, unsafe_allow_html=True)
+                        else:
+                            # If not sent, leave cell empty or placeholder
+                            st.write("")
+                    else:
+                        # Si el candidato ya fue enviado, mostrar en gris y tachado
+                        sent_set = st.session_state.get("sent_set_current", set())
+                        if row.get("email") in sent_set:
+                            styled_val = f"<span style='color:gray;text-decoration:line-through;'>{value}</span>"
+                            st.markdown(styled_val, unsafe_allow_html=True)
+                        else:
+                            st.write(value if value is not None else "-")
 
                 elif ctype == "selectbox":
                     # If 'options' is a callable, call it to get the list
@@ -1012,7 +1106,7 @@ columns_config = [
                     # use the 'field' as the label or a default
                     btn_label = str(field) if field else button_label
                     if st.button(btn_label, disabled=disabled, key=widget_key):
-                        #print("button pressed, button_label:",btn_label,"disabled:",disabled,"widget_key:",widget_key,"onclick_callable", onclick_callable)
+                        
                         if onclick_callable:
                             onclick_callable(row, *onclick_args, **onclick_kwargs)
 
@@ -1043,7 +1137,7 @@ def disable_role_change(row,user_role: str, ROLE_RANK:dict) -> bool:
              we check if rank(cell_role) >= rank(user_role).
     """
     cell_role = row["role"]
-    #print(f"cell_role={cell_role}, user_role={user_role}, ROLE_RANK={ROLE_RANK}")
+    
     # user_role is the role of the user who is *trying* to do the change
     # cell_role is the role of the row being displayed
     return ROLE_RANK[cell_role] <= ROLE_RANK[user_role]
@@ -1309,11 +1403,7 @@ def filter_applicants_by_request(request: dict, cleaned_applicants: "pd.DataFram
     Returns:
         pd.DataFrame: subset de 'cleaned_applicants' que cumple con los criterios.
     """
-
-
     subset = cleaned_applicants.copy()
-    print("filter_applicants_by_request: filtering...")
-    # print subset columns types using a for where each column goes through apply(type).unique()
     
     # 1) Genero
     genero_req = request.get("genero", "Indiferente")
@@ -1365,8 +1455,7 @@ def filter_applicants_by_request(request: dict, cleaned_applicants: "pd.DataFram
     days_req = sorted(days_req, key=lambda x: ["Lunes","Martes","Miércoles","Jueves","Viernes"].index(x))
     if days_req:
         if disp_type == "Completa":
-            print("days_req:",days_req)
-            #print("available_days:",subset["available_days"].tolist())
+            
             subset = subset[
                 subset["available_days"].apply(
                     lambda dd: all(d in dd for d in days_req)
@@ -1410,12 +1499,11 @@ def find_unprocessed_gform_requests(
     df_exist_gf = df_existing[df_existing["created_with"] == "gform"].copy()
     if df_exist_gf.empty:
         return df_gform.copy()
-    print(df_exist_gf['created_at'])
+    
     # Normalizar timestamps y construir claves únicas
     
     df_exist_gf["created_at_dt"] = pd.to_datetime(
         df_exist_gf["created_at"])
-    print(df_exist_gf["created_at_dt"])
     df_exist_gf["__key"] = df_exist_gf.apply(
         lambda r: f"{r['created_at_dt'].strftime('%Y-%m-%d %H:%M:%S')}|{r['created_by']}|{r['school_name']}",
         axis=1

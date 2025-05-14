@@ -23,6 +23,14 @@ from ceas.schools_manager import get_schools_conn
 import pickle
 import random
 from streamlit_gsheets import GSheetsConnection
+import io
+
+# --- Google Drive API imports ---
+from googleapiclient.discovery import build as gapi_build
+from googleapiclient.http import MediaIoBaseDownload
+from google.auth.transport.requests import Request as GRequest
+from google.oauth2.credentials import Credentials as GCredentials
+from google.oauth2 import service_account as gsa
 def get_gform_solicitudes_conn():
     """
     Función que obtiene la conexión a la hoja de Google Sheets con los datos de las solicitudes de reemplazo ingresadas por los colegios.
@@ -533,6 +541,188 @@ def get_days_between_dates(
         "weekdays": weekdays_py,
         "str_weekdays": str_weekdays_es,
     }
+
+# =================================================================
+# Registro de CVs enviados por solicitud (SentCVs)
+# =================================================================
+def _get_sent_cvs_conn():
+    if "connections" not in st.session_state:
+        raise RuntimeError("No hay conexiones disponibles en session_state.")
+    rand = random.choice(st.session_state["connections"])
+    return st.connection(rand, type=GSheetsConnection, ttl=0, max_entries=1)
+
+def _sent_cvs_sheet_name() -> str:
+    return f"{st.session_state['app_name']}SentCVs"
+
+def load_sent_cvs_df() -> pd.DataFrame:
+    try:
+        conn = _get_sent_cvs_conn()
+        df = conn.read(worksheet=_sent_cvs_sheet_name())
+        if df is None or df.empty:
+            return pd.DataFrame(columns=["replacement_id", "email"])
+        df["replacement_id"] = df["replacement_id"].astype(int, errors="ignore")
+        df["email"] = df["email"].astype(str)
+        return df
+    except Exception:
+        return pd.DataFrame(columns=["replacement_id", "email"])
+
+def append_sent_cvs(request_id: int, emails: list[str]):
+    if not emails:
+        return
+    df_exist = load_sent_cvs_df()
+    new_rows = pd.DataFrame({"replacement_id": request_id, "email": emails})
+    df_upd = pd.concat([df_exist, new_rows]).drop_duplicates()
+    try:
+        conn = _get_sent_cvs_conn()
+        conn.update(data=df_upd, worksheet=_sent_cvs_sheet_name())
+    except Exception as e:
+        print(f"[SentCVs] Error al actualizar: {e}")
+
+# =================================================================
+# Google Drive helper utilities – download PDFs that require auth
+# =================================================================
+
+_DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
+
+def _drive_paths():
+    """
+    Returns (token_path, client_secret_path, sa_path).
+
+    * token_path / client_secret_path are for user OAuth.
+    * sa_path can be a single JSON or multiple separated by ':' in env var
+      GOOGLE_SA_JSON (falls back to PROJ_ROOT/service_accounts/*.json).
+    """
+    import os, glob, pathlib
+    token_path  = os.getenv("GMAIL_TOKEN_PATH",   str(cfg.PROJ_ROOT / "token_fixed.pickle"))
+    client_path = os.getenv("GMAIL_CLIENT_SECRET", str(cfg.PROJ_ROOT / "client_secret11.json"))
+    # Expand ~ and relative segments for token_path and client_path
+    token_path  = str(pathlib.Path(token_path).expanduser().resolve())
+    client_path = str(pathlib.Path(client_path).expanduser().resolve())
+    sa_env      = os.getenv("GOOGLE_SA_JSON", "")
+    if sa_env:
+        sa_paths = sa_env.split(":")
+    else:
+        sa_paths = glob.glob(str(cfg.PROJ_ROOT / "service_accounts" / "*.json"))
+    sa_paths = [pathlib.Path(p).expanduser() for p in sa_paths]
+    return token_path, client_path, sa_paths
+
+
+_drive_service_cache = None
+def get_drive_service(use_sa: bool | str = False):
+    """
+    Returns an authenticated Drive service:
+
+    * If use_sa is True  → uses the FIRST service‑account JSON found.
+    * If use_sa is str   → tries to match basename (without .json) against SA file list.
+    * Otherwise (False)  → uses interactive OAuth token (desktop/web flow).
+
+    The chosen service is memoised in _drive_service_cache.
+    """
+    global _drive_service_cache
+    if _drive_service_cache:
+        return _drive_service_cache
+
+    token_path, client_path, sa_paths = _drive_paths()
+
+    # ── 3A. Service‑account branch ─────────────────────────────
+    if use_sa:
+        chosen_path = None
+        if isinstance(use_sa, str):
+            for p in sa_paths:
+                if p.stem == use_sa:
+                    chosen_path = p
+                    break
+        else:  # True means first
+            if sa_paths:
+                chosen_path = sa_paths[0]
+        if not chosen_path or not chosen_path.exists():
+            raise FileNotFoundError("No service‑account JSON found that matches request.")
+
+        creds = gsa.Credentials.from_service_account_file(
+            str(chosen_path),
+            scopes=_DRIVE_SCOPES,
+        )
+        _drive_service_cache = gapi_build("drive", "v3", credentials=creds)
+        return _drive_service_cache
+
+    # ── 3B. User OAuth branch (existing logic) ─────────────────
+    import pickle, os
+    from google_auth_oauthlib.flow import InstalledAppFlow
+
+    creds = None
+    if os.path.exists(token_path):
+        with open(token_path, "rb") as tf:
+            creds = pickle.load(tf)
+        if not set(_DRIVE_SCOPES).issubset(set(creds.scopes)):
+            creds = None
+    if creds is None or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            try:
+                creds.refresh(GRequest())
+            except Exception:
+                creds = None
+        if creds is None:
+            flow = InstalledAppFlow.from_client_secrets_file(client_path, _DRIVE_SCOPES)
+            creds = flow.run_local_server(port=0)
+        with open(token_path, "wb") as tf:
+            pickle.dump(creds, tf)
+
+    _drive_service_cache = gapi_build("drive", "v3", credentials=creds)
+    return _drive_service_cache
+
+
+def extract_drive_file_id(url: str) -> str | None:
+    """
+    Extrae el ID de archivo desde distintos formatos de URL de Google Drive.
+    """
+    import re
+    patterns = [
+        r"/d/([A-Za-z0-9_-]{10,})",          # /d/<ID>/
+        r"id=([A-Za-z0-9_-]{10,})"           # id=<ID>
+    ]
+    for p in patterns:
+        m = re.search(p, url)
+        if m:
+            return m.group(1)
+    return None
+
+
+def download_drive_file(file_id: str) -> bytes | None:
+    """
+    Descarga el archivo de Google Drive con file_id y devuelve su contenido en bytes.
+    Usa Drive API y funciona aunque el link requiera permisos (mismo usuario OAuth).
+    """
+    service = get_drive_service()
+    try:
+        request = service.files().get_media(fileId=file_id)
+        fh = io.BytesIO()
+        downloader = MediaIoBaseDownload(fh, request)
+        done = False
+        while not done:
+            status, done = downloader.next_chunk()
+        return fh.getvalue()
+    except Exception as e:
+        print(f"[Drive] Error descargando {file_id}: {e}")
+        return None
+
+
+def fetch_drive_pdf(url: str, use_sa: bool | str = False) -> bytes | None:
+    """
+    Dado un enlace a Google Drive, intenta descargar el PDF via API.
+    Si falla la autenticación o no es un PDF, devuelve None.
+    """
+    # Ensure service is initialised with chosen credentials
+    get_drive_service(use_sa=use_sa)
+    file_id = extract_drive_file_id(url)
+    if not file_id:
+        return None
+    data = download_drive_file(file_id)
+    if data is None:
+        return None
+    # Validar tipo básico ('%PDF' o 'PK\x03\x04' for docx or D0CF for doc)
+    if data[:4] not in (b"%PDF", b"PK\x03\x04", b"\xd0\xcf\x11\xe0"):
+        return None
+    return data
 def validate_email(email: str,domain = None) -> bool:
     """
     Valida si un email es válido o no.

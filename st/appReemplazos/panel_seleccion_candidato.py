@@ -6,6 +6,8 @@ from ceas import schools_manager
 from ceas.config import INTERIM_DATA_DIR, TEMPLATES_DIR
 import pandas as pd
 import numpy as np
+import tempfile, requests, pathlib, time, mimetypes
+import re
 # --- Extra imports for email dialog ---
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 # --- Required ceas imports ---
@@ -18,19 +20,48 @@ from ceas.utils import (
     build_selector_definitions,
     render_selectors,
     filter_df_by_filters,
+    fetch_drive_pdf,
+    append_sent_cvs,
+    load_sent_cvs_df,
 )
 # --- Ensure these imports for cascade filters and request formatting ---
 from ceas.serialize_data import deserialize_request_from_sheets, format_request_for_panel_display,format_candidates_for_panel_display, format_request_data_for_email
 from ceas.utils import render_cascade_filters, build_selector_definitions, filter_df_by_filters
 # --- Extra imports for email dialog ---
 from jinja2 import Environment, FileSystemLoader, select_autoescape
+if "cv_cache" not in st.session_state:
+    st.session_state["cv_cache"] = {}  # url -> bytes
+
+if "sent_cvs" not in st.session_state:
+    # cargar desde GSheets
+    df_log = load_sent_cvs_df()
+    st.session_state["sent_cvs"] = {
+        rid: set(grp["email"]) for rid, grp in df_log.groupby("replacement_id")
+    }
+def drive_to_download(url: str) -> str:
+    """
+    Convierte diferentes formatos de Google Drive a link de descarga directa.
+    """
+    m = re.search(r"/d/([A-Za-zA-Z0-9_-]+)/", url)          # .../d/<ID>/
+    if not m:
+        m = re.search(r"open\?id=([A-Za-zA-Z0-9_-]+)", url) # open?id=<ID>
+    if m:
+        file_id = m.group(1)
+        return f"https://drive.google.com/uc?export=download&id={file_id}"
+    return url
+
 st.title("Panel de Selección de Candidatos")
 
-def checkbox_render_fn(row,disabled=True,widget_key=None,*args, **kwargs):
-    """
-    Función para renderizar el widget st.checkbox en la columna "Checkbox" de la tabla.
-    """
-    st.checkbox(label="Seleccionar",key = widget_key,value = False,label_visibility="collapsed",disabled=disabled)
+def checkbox_render_fn(row, disabled=True, widget_key=None, *_, **__):
+    sent = st.session_state.get("sent_set_current", set())
+    already = row["email"] in sent
+    st.checkbox(
+        "Enviado" if already else "Seleccionar",
+        key=widget_key,
+        value=False,
+        label_visibility="collapsed",
+        disabled=disabled or already,
+    )
 def cv_link_render_fn(row,disabled=True,widget_key=None,*args, **kwargs):
     """
     Función para renderizar el widget st.checkbox en la columna "Checkbox" de la tabla.
@@ -103,14 +134,68 @@ def show_email_dialog(selected_df: pd.DataFrame, request_data: dict):
             )
         body = st.text_area("Cuerpo del correo", value=rendered, height=350)
 
-        # --- Listar CVs disponibles ---
-        st.markdown("#### CVs adjuntos (enlaces)")
-        for _, r in selected_df.iterrows():
-            if r.get("cv_link"):
-                st.markdown(
-                    f"- {r['first_name']} {r['last_name']}: [CV]({r['cv_link']})",
-                    unsafe_allow_html=True
+        st.markdown("#### CVs de candidatos")
+        temp_dir = pathlib.Path(tempfile.mkdtemp(prefix="cvs_"))
+        attachments = []
+        cv_cols = st.columns([0.5, 0.5])
+        for idx, r in selected_df.iterrows():
+            if not r.get("cv_link"):
+                continue
+            name = f"{r['first_name']} {r['last_name']}"
+            # ----------------------------------------------------------
+            # Descargar archivo (Drive API primero; si falla pública)
+            # ----------------------------------------------------------
+            cache_key = r["cv_link"]
+            if cache_key in st.session_state["cv_cache"]:
+                file_bytes = st.session_state["cv_cache"][cache_key]
+            else:
+                file_bytes = fetch_drive_pdf(r["cv_link"], use_sa=True)
+                if file_bytes is None:
+                    dl_url = drive_to_download(r["cv_link"])
+                    try:
+                        resp = requests.get(dl_url, timeout=20)
+                        resp.raise_for_status()
+                        file_bytes = resp.content
+                    except Exception as e:
+                        st.warning(f"No se pudo descargar CV de {name}: {e}")
+                        continue
+                st.session_state["cv_cache"][cache_key] = file_bytes
+
+            # ---- Detectar extensión por magic-bytes ----------
+            if file_bytes[:4] == b"%PDF":
+                ext = ".pdf"
+            elif file_bytes[:2] == b"PK":
+                ext = ".docx"
+            elif file_bytes[:4] == b"\xd0\xcf\x11\xe0":
+                ext = ".doc"
+            else:
+                ext = ".bin"
+            safe_fname = f"{name.replace(' ', '_')}_{idx}{ext}"
+
+            cv_path = pathlib.Path(temp_dir) / safe_fname
+            cv_path.write_bytes(file_bytes)
+
+            with cv_cols[0]:
+                attach_flag = st.checkbox(
+                    f"Adjuntar {name}", value=True, key=f"chk_attach_{idx}"
                 )
+            with cv_cols[1]:
+                st.download_button(
+                    label=f"Descargar archivo",
+                    data=file_bytes,
+                    file_name=safe_fname,
+                    mime="application/octet-stream",
+                    key=f"btn_dl_{idx}"
+                )
+
+            if attach_flag:
+                attachments.append({
+                    "filename": safe_fname,
+                    "data": file_bytes,
+                    "mime_type": "application/octet-stream"
+                })
+
+        # Previsualización deshabilitada por ahora
 
         # --- Opción para adjuntar archivos adicionales ---
         st.file_uploader(
@@ -123,7 +208,6 @@ def show_email_dialog(selected_df: pd.DataFrame, request_data: dict):
         col_ok, col_cancel = st.columns(2)
         with col_ok:
             if st.button("Enviar", key="dlg_send"):
-                
                 # Se delega a send_candidates_email para enviar
                 try:
                     from ceas.reemplazos.gmail import send_candidates_email
@@ -135,12 +219,23 @@ def show_email_dialog(selected_df: pd.DataFrame, request_data: dict):
                         solicitante=request_data["created_by"],
                         lista_candidatos="\n".join(cand_list),
                         to_email=to_val,
+                        cc=cc_val if cc_val else None,
+                        bcc=bcc_val if bcc_val else None,
                         subject=subject,
                         template_path=None,
                         custom_html=body,
+                        attachments=attachments,
                     )
                     if status:
                         st.success("Correo enviado correctamente.")
+                        # Registrar enviados
+                        req_id = request_data["replacement_id"]
+                        sent = st.session_state["sent_cvs"].get(req_id, set())
+                        sent.update(selected_df["email"].tolist())
+                        st.session_state["sent_cvs"][req_id] = sent
+                        append_sent_cvs(req_id, list(selected_df["email"]))
+                        time.sleep(2)
+                        st.rerun()
                     else:
                         st.error("No se pudo enviar el correo.")
                 except Exception as e:
@@ -427,9 +522,19 @@ def panel(solicitud):
         # --- Métrica: número de candidatos filtrados ---
         st.metric("Candidatos encontrados", len(df_filtered_applicants))
         df_filtered_applicants_formatted = format_candidates_for_panel_display(df_filtered_applicants)
+
+        # --- Marcar candidatos ya enviados ---
+        sent_set_req = st.session_state["sent_cvs"].get(req["replacement_id"], set())
+        st.session_state["sent_set_current"] = sent_set_req         # para los checkboxes
+        df_filtered_applicants_formatted["Enviado"] = df_filtered_applicants_formatted[
+            "email"
+        ].apply(lambda x: "Sí" if x in sent_set_req else "")
+
+        # --- Tabla de candidatos ---
         # Selector de columnas a mostrar
         available_columns = [
             {"header": "", "type": "custom", "render_fn": checkbox_render_fn, "width": 0.3},
+            {"header": "Enviado", "field": "Enviado", "type": "text", "width": 0.6},
             {"header": "Email", "field": "email", "type": "text", "width": 2},
             {"header": "Nombre", "field": "full_name", "type": "text", "width": 1},
 

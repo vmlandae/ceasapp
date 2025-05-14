@@ -3,7 +3,8 @@ import ceas.config as cfg
 from ceas.reemplazos.gmail_fixed import (
     authenticate_fixed,
     create_html_message,
-    send_message
+    send_message,
+    token_is_valid,
 )
 
 def send_candidates_email(
@@ -14,8 +15,12 @@ def send_candidates_email(
     solicitante: str,
     lista_candidatos: str,
     to_email: str,
+    cc: str | None = None,
+    bcc: str | None = None,
     subject: str = "Opciones de candidatos",
-    template_path: str = "email_candidates_template.html"
+    template_path: str = "email_candidates_template.html",
+    custom_html: str | None = None,
+    attachments: list | None = None,
 ):
     """
     Envía un correo HTML usando tu template jinja2 para notificar sobre candidatos disponibles.
@@ -45,20 +50,19 @@ def send_candidates_email(
     
     Retorna True/False según éxito.
     """
-    # token path
-    token_path = cfg.PROJ_ROOT / 'token_fixed.pickle'
-    token_path = str(token_path)
-    print("token_path:", token_path)
-    # Check if token file exists
-    if not os.path.exists(token_path):
-        print(f"Token file {token_path} not found.")
-        #return False
-    # Check if template file exists
+    # -------- Validar token antes de autenticar ----------
+    # El token se obtiene automáticamente vía GMAIL_TOKEN_PATH en gmail_fixed._get_paths()
+    if not token_is_valid():
+        import streamlit as st
+        st.warning("Se requiere reautorizar Gmail: se abrirá ventana OAuth.")
 
-    
-    template_path = cfg.PROJ_ROOT / template_path
-    try:
-        service = authenticate_fixed(path=token_path)  # Autentica a personas@ceas.cl
+    # Si custom_html está provisto, ignorar template y contexto
+    if custom_html is not None:
+        template_path_full = None
+        context = None
+    else:
+        # Si se quiere usar template, construir contexto y ruta completa
+        template_path_full = cfg.PROJ_ROOT / template_path if template_path else None
         context = {
             "institucion": institucion,
             "asignatura": asignatura,
@@ -66,13 +70,19 @@ def send_candidates_email(
             "solicitante": solicitante,
             "lista_candidatos": lista_candidatos
         }
+    try:
+        service = authenticate_fixed()  # Autentica con token en GMAIL_TOKEN_PATH
         # Create HTML message
         message_dict = create_html_message(
             sender="personas@ceas.cl",
             to=to_email,
+            cc=cc,
+            bcc=bcc,
             subject=subject,
-            template_path=template_path,
-            context=context
+            template_path=template_path_full,
+            context=context,
+            custom_html=custom_html,
+            attachments=attachments,
         )
         # Send
         result = send_message(service, user_id="me", message=message_dict)
